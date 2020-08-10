@@ -245,6 +245,9 @@ PVOID sendVideoPackets(PVOID args)
                 printf("writeFrame() failed with 0x%08x", status);
 #endif
             }
+            if (status == STATUS_SUCCESS) {
+                logIceCandidatePairStats(pSampleConfiguration->sampleStreamingSessionList[i]);
+            }
         }
         MUTEX_UNLOCK(pSampleConfiguration->sampleConfigurationObjLock);
 

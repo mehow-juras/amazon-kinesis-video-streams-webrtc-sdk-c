@@ -179,6 +179,47 @@ CleanUp:
     return retStatus;
 }
 
+STATUS logIceCandidatePairStats(PSampleStreamingSession pSampleStreamingSession)
+{
+    ENTERS();
+    STATUS retStatus = STATUS_SUCCESS;
+    RtcStats rtcMetrics;
+
+    CHK(pSampleStreamingSession != NULL, STATUS_NULL_ARG);
+    rtcMetrics.requestedTypeOfStats = RTC_STATS_TYPE_CANDIDATE_PAIR;
+    CHK_STATUS(rtcPeerConnectionGetMetrics(pSampleStreamingSession->pPeerConnection, NULL, &rtcMetrics));
+    RtcIceCandidatePairStats iceCandidateStats = rtcMetrics.rtcStatsObject.iceCandidatePairStats;
+    //    DLOGD("Local Candidate ID: %s", iceCandidateStats.localCandidateId);
+    //    DLOGD("Remote Candidate ID: %s", iceCandidateStats.remoteCandidateId);
+    DLOGD("Ice Candidate Pair state: %d", iceCandidateStats.state);
+//    DLOGD("Nomination state: %s", iceCandidateStats.nominated? "nominated" : "not nominated");
+//
+//    DLOGD("Number of packets discarded on send: %llu", iceCandidateStats.packetsDiscardedOnSend);
+//    DLOGD("Number of packets sent: %llu", iceCandidateStats.packetsSent);
+//    DLOGD("Number of packets received: %llu", iceCandidateStats.packetsReceived);
+//
+//    DLOGD("Number of bytes discarded on send: %llu", iceCandidateStats.bytesDiscardedOnSend);
+//    DLOGD("Number of bytes sent: %llu", iceCandidateStats.bytesSent);
+//    DLOGD("Number of bytes received: %llu", iceCandidateStats.bytesReceived);
+//
+//    DLOGD("Last packet sent timestamp: %llu", iceCandidateStats.lastPacketSentTimestamp);
+//    DLOGD("Last packet received timestamp: %llu", iceCandidateStats.lastPacketReceivedTimestamp);
+//    DLOGD("Last STUN request timestamp: %llu", iceCandidateStats.lastRequestTimestamp);
+//    DLOGD("First STUN request timestamp: %llu", iceCandidateStats.firstRequestTimestamp);
+//    DLOGD("Last binding response timestamp: %llu", iceCandidateStats.lastResponseTimestamp);
+//
+//    DLOGD("Total round trip time for STUN request %" PRIu64 "ms", iceCandidateStats.totalRoundTripTime);
+//    DLOGD("Current round trip time recorded for STUN request %" PRIu64 "ms", iceCandidateStats.currentRoundTripTime);
+//
+//    DLOGD("Number of STUN requests received: %llu", iceCandidateStats.requestsReceived);
+//    DLOGD("Number of STUN requests sent: %llu", iceCandidateStats.requestsSent);
+//    DLOGD("Number of STUN responses received: %llu", iceCandidateStats.responsesReceived);
+//    DLOGD("Number of STUN responses sent: %llu", iceCandidateStats.responsesSent);
+CleanUp:
+    LEAVES();
+    return retStatus;
+}
+
 STATUS logSelectedIceCandidatesInformation(PSampleStreamingSession pSampleStreamingSession)
 {
     ENTERS();

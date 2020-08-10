@@ -127,7 +127,7 @@ STATUS sessionCleanupWait(PSampleConfiguration);
 STATUS awaitGetIceConfigInfoCount(SIGNALING_CLIENT_HANDLE, PUINT32);
 STATUS logSignalingClientStats(PSignalingClientMetrics);
 STATUS logSelectedIceCandidatesInformation(PSampleStreamingSession);
-
+STATUS logIceCandidatePairStats(PSampleStreamingSession);
 #ifdef __cplusplus
 }
 #endif

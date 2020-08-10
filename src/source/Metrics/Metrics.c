@@ -7,11 +7,52 @@
 STATUS getIceCandidatePairStats(PRtcPeerConnection pRtcPeerConnection, PRtcIceCandidatePairStats pRtcIceCandidatePairStats)
 {
     STATUS retStatus = STATUS_SUCCESS;
+    BOOL locked = FALSE;
+    PIceAgent pIceAgent = ((PKvsPeerConnection) pRtcPeerConnection)->pIceAgent;
     PKvsPeerConnection pKvsPeerConnection = (PKvsPeerConnection) pRtcPeerConnection;
-    UNUSED_PARAM(pKvsPeerConnection);
     CHK((pRtcPeerConnection != NULL || pRtcIceCandidatePairStats != NULL), STATUS_NULL_ARG);
-    CHK(FALSE, STATUS_NOT_IMPLEMENTED);
+    MUTEX_LOCK(pIceAgent->lock);
+    locked = TRUE;
+    if (pIceAgent->pDataSendingIceCandidatePair == NULL) {
+        retStatus = STATUS_SUCCESS;
+        goto CleanUp;
+    } else {
+        DLOGD("Not null");
+    }
+    PRtcIceCandidatePairDiagnostics pRtcIceCandidatePairDiagnostics = &pIceAgent->pDataSendingIceCandidatePair->rtcIceCandidatePairDiagnostics;
+    STRCPY(pRtcIceCandidatePairStats->localCandidateId, pRtcIceCandidatePairDiagnostics->localCandidateId);
+    STRCPY(pRtcIceCandidatePairStats->remoteCandidateId, pRtcIceCandidatePairDiagnostics->remoteCandidateId);
+    pRtcIceCandidatePairStats->state = pRtcIceCandidatePairDiagnostics->state;
+    pRtcIceCandidatePairStats->nominated = pRtcIceCandidatePairDiagnostics->nominated;
+
+    // Note: circuitBreakerTriggerCount This is set to NULL currently
+    pRtcIceCandidatePairStats->circuitBreakerTriggerCount = pRtcIceCandidatePairDiagnostics->circuitBreakerTriggerCount;
+
+    pRtcIceCandidatePairStats->packetsDiscardedOnSend = pRtcIceCandidatePairDiagnostics->packetsDiscardedOnSend;
+    pRtcIceCandidatePairStats->packetsSent = pRtcIceCandidatePairDiagnostics->packetsSent;
+    pRtcIceCandidatePairStats->packetsReceived = pRtcIceCandidatePairDiagnostics->packetsReceived;
+
+    pRtcIceCandidatePairStats->bytesDiscardedOnSend = pRtcIceCandidatePairDiagnostics->bytesDiscardedOnSend;
+    pRtcIceCandidatePairStats->bytesSent = pRtcIceCandidatePairDiagnostics->bytesSent;
+    pRtcIceCandidatePairStats->bytesReceived = pRtcIceCandidatePairDiagnostics->bytesReceived;
+
+    pRtcIceCandidatePairStats->lastPacketSentTimestamp = pRtcIceCandidatePairDiagnostics->lastPacketSentTimestamp;
+    pRtcIceCandidatePairStats->lastPacketReceivedTimestamp = pRtcIceCandidatePairDiagnostics->lastPacketReceivedTimestamp;
+    pRtcIceCandidatePairStats->lastRequestTimestamp = pRtcIceCandidatePairDiagnostics->lastRequestTimestamp;
+    pRtcIceCandidatePairStats->firstRequestTimestamp = pRtcIceCandidatePairDiagnostics->firstRequestTimestamp;
+    pRtcIceCandidatePairStats->lastResponseTimestamp = pRtcIceCandidatePairDiagnostics->lastResponseTimestamp;
+
+    pRtcIceCandidatePairStats->totalRoundTripTime = pRtcIceCandidatePairDiagnostics->totalRoundTripTime;
+    pRtcIceCandidatePairStats->currentRoundTripTime = pRtcIceCandidatePairDiagnostics->currentRoundTripTime;
+
+    pRtcIceCandidatePairStats->requestsReceived = pRtcIceCandidatePairDiagnostics->requestsReceived;
+    pRtcIceCandidatePairStats->requestsSent = pRtcIceCandidatePairDiagnostics->requestsSent;
+    pRtcIceCandidatePairStats->responsesReceived = pRtcIceCandidatePairDiagnostics->responsesReceived;
+    pRtcIceCandidatePairStats->responsesSent = pRtcIceCandidatePairDiagnostics->responsesSent;
 CleanUp:
+    if (locked) {
+        MUTEX_UNLOCK(pIceAgent->lock);
+    }
     return retStatus;
 }
 
@@ -125,7 +166,7 @@ STATUS rtcPeerConnectionGetMetrics(PRtcPeerConnection pRtcPeerConnection, PRtcRt
     CHK(pRtcPeerConnection != NULL && pRtcMetrics != NULL, STATUS_NULL_ARG);
     switch (pRtcMetrics->requestedTypeOfStats) {
         case RTC_STATS_TYPE_CANDIDATE_PAIR:
-            getIceCandidatePairStats(pRtcPeerConnection, &pRtcMetrics->rtcStatsObject.iceCandidatePairStats);
+            CHK_STATUS(getIceCandidatePairStats(pRtcPeerConnection, &pRtcMetrics->rtcStatsObject.iceCandidatePairStats));
             break;
         case RTC_STATS_TYPE_LOCAL_CANDIDATE:
             CHK_STATUS(getIceCandidateStats(pRtcPeerConnection, FALSE, &pRtcMetrics->rtcStatsObject.localIceCandidateStats));
