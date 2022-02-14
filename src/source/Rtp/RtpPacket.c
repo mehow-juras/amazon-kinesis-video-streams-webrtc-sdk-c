@@ -97,6 +97,8 @@ STATUS createRtpPacketFromBytes(PBYTE rawPacket, UINT32 packetLength, PRtpPacket
 CleanUp:
 
     if (STATUS_FAILED(retStatus) && pRtpPacket != NULL) {
+        // Release ownership of rawPacket instead of freeing rawPacket
+        pRtpPacket->pRawPacket = NULL;
         freeRtpPacket(&pRtpPacket);
         pRtpPacket = NULL;
     }
@@ -183,23 +185,23 @@ STATUS setRtpPacketFromBytes(PBYTE rawPacket, UINT32 packetLength, PRtpPacket pR
     csrcCount = rawPacket[0] & CSRC_COUNT_MASK;
     marker = ((rawPacket[1] >> MARKER_SHIFT) & MARKER_MASK) > 0;
     payloadType = rawPacket[1] & PAYLOAD_TYPE_MASK;
-    sequenceNumber = getInt16(*(PUINT16)(rawPacket + SEQ_NUMBER_OFFSET));
-    timestamp = getInt32(*(PUINT32)(rawPacket + TIMESTAMP_OFFSET));
-    ssrc = getInt32(*(PUINT32)(rawPacket + SSRC_OFFSET));
+    sequenceNumber = getInt16(*(PUINT16) (rawPacket + SEQ_NUMBER_OFFSET));
+    timestamp = getInt32(*(PUINT32) (rawPacket + TIMESTAMP_OFFSET));
+    ssrc = getInt32(*(PUINT32) (rawPacket + SSRC_OFFSET));
 
     currOffset = CSRC_OFFSET + (csrcCount * CSRC_LENGTH);
     CHK(packetLength >= currOffset, STATUS_RTP_INPUT_PACKET_TOO_SMALL);
 
     if (csrcCount > 0) {
-        csrcArray = (PUINT32)(rawPacket + CSRC_OFFSET);
+        csrcArray = (PUINT32) (rawPacket + CSRC_OFFSET);
     }
 
     if (extension) {
-        extensionProfile = getInt16(*(PUINT16)(rawPacket + currOffset));
+        extensionProfile = getInt16(*(PUINT16) (rawPacket + currOffset));
         currOffset += SIZEOF(UINT16);
-        extensionLength = getInt16(*(PUINT16)(rawPacket + currOffset)) * 4;
+        extensionLength = getInt16(*(PUINT16) (rawPacket + currOffset)) * 4;
         currOffset += SIZEOF(UINT16);
-        extensionPayload = (PBYTE)(rawPacket + currOffset);
+        extensionPayload = (PBYTE) (rawPacket + currOffset);
         currOffset += extensionLength;
     }
 
@@ -312,7 +314,9 @@ STATUS setBytesFromRtpPacket(PRtpPacket pRtpPacket, PBYTE pRawPacket, UINT32 pac
         pCurPtr += pHeader->extensionLength;
     }
 
-    MEMCPY(pCurPtr, pRtpPacket->payload, pRtpPacket->payloadLength);
+    if (pRtpPacket->payload != NULL && pRtpPacket->payloadLength > 0) {
+        MEMCPY(pCurPtr, pRtpPacket->payload, pRtpPacket->payloadLength);
+    }
 CleanUp:
     LEAVES();
     return retStatus;

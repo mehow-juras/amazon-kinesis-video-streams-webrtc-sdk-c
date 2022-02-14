@@ -204,9 +204,11 @@ STATUS writeFrame(PRtcRtpTransceiver pRtcRtpTransceiver, PFrame pFrame)
 
     // temp vars :(
     UINT64 tmpFrames, tmpTime;
+    UINT16 twsn;
+    UINT32 extpayload;
     STATUS sendStatus;
 
-    CHK(pKvsRtpTransceiver != NULL, STATUS_NULL_ARG);
+    CHK(pKvsRtpTransceiver != NULL && pFrame != NULL, STATUS_NULL_ARG);
     pKvsPeerConnection = pKvsRtpTransceiver->pKvsPeerConnection;
     pPayloadArray = &(pKvsRtpTransceiver->sender.payloadArray);
     if (MEDIA_STREAM_TRACK_KIND_VIDEO == pKvsRtpTransceiver->sender.track.kind) {
@@ -220,7 +222,7 @@ STATUS writeFrame(PRtcRtpTransceiver pRtcRtpTransceiver, PFrame pFrame)
         } else if (now - pKvsRtpTransceiver->sender.lastKnownFrameCountTime > HUNDREDS_OF_NANOS_IN_A_SECOND) {
             tmpFrames = (pKvsRtpTransceiver->outboundStats.framesEncoded + frames) - pKvsRtpTransceiver->sender.lastKnownFrameCount;
             tmpTime = now - pKvsRtpTransceiver->sender.lastKnownFrameCountTime;
-            fps = (DOUBLE)(tmpFrames * HUNDREDS_OF_NANOS_IN_A_SECOND) / (DOUBLE) tmpTime;
+            fps = (DOUBLE) (tmpFrames * HUNDREDS_OF_NANOS_IN_A_SECOND) / (DOUBLE) tmpTime;
         }
     }
 
@@ -278,7 +280,14 @@ STATUS writeFrame(PRtcRtpTransceiver pRtcRtpTransceiver, PFrame pFrame)
     bufferAfterEncrypt = (pKvsRtpTransceiver->sender.payloadType == pKvsRtpTransceiver->sender.rtxPayloadType);
     for (i = 0; i < pPayloadArray->payloadSubLenSize; i++) {
         pRtpPacket = pPacketList + i;
-
+        if (pKvsRtpTransceiver->pKvsPeerConnection->twccExtId != 0) {
+            pRtpPacket->header.extension = TRUE;
+            pRtpPacket->header.extensionProfile = TWCC_EXT_PROFILE;
+            pRtpPacket->header.extensionLength = SIZEOF(UINT32);
+            twsn = (UINT16) ATOMIC_INCREMENT(&pKvsRtpTransceiver->pKvsPeerConnection->transportWideSequenceNumber);
+            extpayload = TWCC_PAYLOAD(pKvsRtpTransceiver->pKvsPeerConnection->twccExtId, twsn);
+            pRtpPacket->header.extensionPayload = (PBYTE) &extpayload;
+        }
         // Get the required size first
         CHK_STATUS(createBytesFromRtpPacket(pRtpPacket, NULL, &packetLen));
 
@@ -302,6 +311,9 @@ STATUS writeFrame(PRtcRtpTransceiver pRtcRtpTransceiver, PFrame pFrame)
             framesDiscardedOnSend = 1;
             SAFE_MEMFREE(rawPacket);
             continue;
+        } else if (sendStatus == STATUS_SUCCESS && pKvsRtpTransceiver->pKvsPeerConnection->twccExtId != 0) {
+            pRtpPacket->sentTime = GETTIME();
+            twccManagerOnPacketSent(pKvsPeerConnection, pRtpPacket);
         }
         CHK_STATUS(sendStatus);
         if (bufferAfterEncrypt) {

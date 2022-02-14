@@ -10,7 +10,7 @@ Socket Connection internal include file
 extern "C" {
 #endif
 
-#define SOCKET_SEND_RETRY_TIMEOUT_MICRO_SECOND 500000
+#define SOCKET_SEND_RETRY_TIMEOUT_MILLI_SECOND 500
 #define MAX_SOCKET_WRITE_RETRY                 3
 
 #define CLOSE_SOCKET_IF_CANT_RETRY(e, ps)                                                                                                            \
@@ -27,6 +27,10 @@ struct __SocketConnection {
     volatile ATOMIC_BOOL connectionClosed;
     /* Process incoming bits */
     volatile ATOMIC_BOOL receiveData;
+
+    /* Socket is in use and can't be freed */
+    volatile ATOMIC_BOOL inUse;
+
     INT32 localSocket;
     KVS_SOCKET_PROTOCOL protocol;
     KvsIpAddress peerIpAddr;

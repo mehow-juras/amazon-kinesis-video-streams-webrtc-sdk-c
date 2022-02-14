@@ -32,7 +32,22 @@ extern "C" {
 
 #define RTP_GET_RAW_PACKET_SIZE(pRtpPacket) (RTP_HEADER_LEN(pRtpPacket) + ((pRtpPacket)->payloadLength))
 
-#define GET_UINT16_SEQ_NUM(seqIndex) ((UINT16)((seqIndex) % (MAX_UINT16 + 1)))
+#define GET_UINT16_SEQ_NUM(seqIndex) ((UINT16) ((seqIndex) % (MAX_UINT16 + 1)))
+
+/*
+ *
+     0                   1                   2                   3
+      0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     |       0xBE    |    0xDE       |           length=1            |
+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     |  ID   | L=1   |transport-wide sequence number | zero padding  |
+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ */
+// https://tools.ietf.org/html/draft-holmer-rmcat-transport-wide-cc-extensions-01
+#define TWCC_EXT_PROFILE                 0xBEDE
+#define TWCC_PAYLOAD(extId, sequenceNum) htonl((((extId) &0xfu) << 28u) | (1u << 24u) | ((UINT32) (sequenceNum) << 8u))
+#define TWCC_SEQNUM(extPayload)          ((UINT16) getUnalignedInt16BigEndian(extPayload + 1))
 
 typedef STATUS (*DepayRtpPayloadFunc)(PBYTE, UINT32, PBYTE, PUINT32, PBOOL);
 
@@ -89,6 +104,8 @@ struct __RtpPacket {
     UINT32 rawPacketLength;
     // used for jitterBufferDelay calculation
     UINT64 receivedTime;
+    // used for twcc time delta calculation
+    UINT64 sentTime;
 };
 typedef RtpPacket* PRtpPacket;
 

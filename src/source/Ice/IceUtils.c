@@ -16,7 +16,7 @@ STATUS createTransactionIdStore(UINT32 maxIdCount, PTransactionIdStore* ppTransa
     pTransactionIdStore = (PTransactionIdStore) MEMCALLOC(1, SIZEOF(TransactionIdStore) + STUN_TRANSACTION_ID_LEN * maxIdCount);
     CHK(pTransactionIdStore != NULL, STATUS_NOT_ENOUGH_MEMORY);
 
-    pTransactionIdStore->transactionIds = (PBYTE)(pTransactionIdStore + 1);
+    pTransactionIdStore->transactionIds = (PBYTE) (pTransactionIdStore + 1);
     pTransactionIdStore->maxTransactionIdsCount = maxIdCount;
 
 CleanUp:
@@ -91,6 +91,22 @@ BOOL transactionIdStoreHasId(PTransactionIdStore pTransactionIdStore, PBYTE tran
     return idFound;
 }
 
+VOID transactionIdStoreRemove(PTransactionIdStore pTransactionIdStore, PBYTE transactionId)
+{
+    UINT32 i, j;
+
+    CHECK(pTransactionIdStore != NULL);
+
+    for (i = pTransactionIdStore->earliestTransactionIdIndex, j = 0; j < pTransactionIdStore->maxTransactionIdsCount; ++j) {
+        if (MEMCMP(transactionId, pTransactionIdStore->transactionIds + i * STUN_TRANSACTION_ID_LEN, STUN_TRANSACTION_ID_LEN) == 0) {
+            MEMSET(pTransactionIdStore->transactionIds + i * STUN_TRANSACTION_ID_LEN, 0x00, STUN_TRANSACTION_ID_LEN);
+            return;
+        }
+
+        i = (i + 1) % pTransactionIdStore->maxTransactionIdsCount;
+    }
+}
+
 VOID transactionIdStoreClear(PTransactionIdStore pTransactionIdStore)
 {
     CHECK(pTransactionIdStore != NULL);
@@ -109,7 +125,7 @@ STATUS iceUtilsGenerateTransactionId(PBYTE pBuffer, UINT32 bufferLen)
     CHK(bufferLen == STUN_TRANSACTION_ID_LEN, STATUS_INVALID_ARG);
 
     for (i = 0; i < STUN_TRANSACTION_ID_LEN; ++i) {
-        pBuffer[i] = ((BYTE)(RAND() % 0x100));
+        pBuffer[i] = ((BYTE) (RAND() % 0x100));
     }
 
 CleanUp:

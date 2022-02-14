@@ -225,7 +225,7 @@ CleanUp:
         g_clear_error(&error);
     }
 
-    return (PVOID)(ULONG_PTR) retStatus;
+    return (PVOID) (ULONG_PTR) retStatus;
 }
 
 VOID onGstAudioFrameReady(UINT64 customData, PFrame pFrame)
@@ -330,27 +330,35 @@ CleanUp:
         g_clear_error(&error);
     }
 
-    return (PVOID)(ULONG_PTR) retStatus;
+    return (PVOID) (ULONG_PTR) retStatus;
 }
 
 INT32 main(INT32 argc, CHAR* argv[])
 {
     STATUS retStatus = STATUS_SUCCESS;
     PSampleConfiguration pSampleConfiguration = NULL;
+    PCHAR pChannelName;
+
+    SET_INSTRUMENTED_ALLOCATORS();
 
     signal(SIGINT, sigintHandler);
 
     // do trickle-ice by default
     printf("[KVS GStreamer Master] Using trickleICE by default\n");
 
-    retStatus =
-        createSampleConfiguration(argc > 1 ? argv[1] : SAMPLE_CHANNEL_NAME, SIGNALING_CHANNEL_ROLE_TYPE_MASTER, TRUE, TRUE, &pSampleConfiguration);
+#ifdef IOT_CORE_ENABLE_CREDENTIALS
+    CHK_ERR((pChannelName = getenv(IOT_CORE_THING_NAME)) != NULL, STATUS_INVALID_OPERATION, "AWS_IOT_CORE_THING_NAME must be set");
+#else
+    pChannelName = argc > 1 ? argv[1] : SAMPLE_CHANNEL_NAME;
+#endif
+
+    retStatus = createSampleConfiguration(pChannelName, SIGNALING_CHANNEL_ROLE_TYPE_MASTER, TRUE, TRUE, &pSampleConfiguration);
     if (retStatus != STATUS_SUCCESS) {
         printf("[KVS GStreamer Master] createSampleConfiguration(): operation returned status code: 0x%08x \n", retStatus);
         goto CleanUp;
     }
 
-    printf("[KVS GStreamer Master] Created signaling channel %s\n", (argc > 1 ? argv[1] : SAMPLE_CHANNEL_NAME));
+    printf("[KVS GStreamer Master] Created signaling channel %s\n", pChannelName);
 
     if (pSampleConfiguration->enableFileLogging) {
         retStatus =
@@ -422,6 +430,12 @@ INT32 main(INT32 argc, CHAR* argv[])
     printf("[KVS GStreamer Master] Signaling client created successfully\n");
 
     // Enable the processing of the messages
+    retStatus = signalingClientFetchSync(pSampleConfiguration->signalingClientHandle);
+    if (retStatus != STATUS_SUCCESS) {
+        printf("[KVS Master] signalingClientFetchSync(): operation returned status code: 0x%08x \n", retStatus);
+        goto CleanUp;
+    }
+
     retStatus = signalingClientConnectSync(pSampleConfiguration->signalingClientHandle);
     if (retStatus != STATUS_SUCCESS) {
         printf("[KVS GStreamer Master] signalingClientConnectSync(): operation returned status code: 0x%08x \n", retStatus);
@@ -429,7 +443,7 @@ INT32 main(INT32 argc, CHAR* argv[])
     }
     printf("[KVS GStreamer Master] Signaling client connection to socket established\n");
 
-    printf("[KVS Gstreamer Master] Beginning streaming...check the stream over channel %s\n", (argc > 1 ? argv[1] : SAMPLE_CHANNEL_NAME));
+    printf("[KVS Gstreamer Master] Beginning streaming...check the stream over channel %s\n", pChannelName);
 
     gSampleConfiguration = pSampleConfiguration;
 
@@ -454,9 +468,8 @@ CleanUp:
         // Kick of the termination sequence
         ATOMIC_STORE_BOOL(&pSampleConfiguration->appTerminateFlag, TRUE);
 
-        if (pSampleConfiguration->videoSenderTid != (UINT64) NULL) {
-            // Join the threads
-            THREAD_JOIN(pSampleConfiguration->videoSenderTid, NULL);
+        if (pSampleConfiguration->mediaSenderTid != INVALID_TID_VALUE) {
+            THREAD_JOIN(pSampleConfiguration->mediaSenderTid, NULL);
         }
 
         if (pSampleConfiguration->enableFileLogging) {
@@ -473,6 +486,8 @@ CleanUp:
         }
     }
     printf("[KVS Gstreamer Master] Cleanup done\n");
+
+    RESET_INSTRUMENTED_ALLOCATORS();
 
     // https://www.gnu.org/software/libc/manual/html_node/Exit-Status.html
     // We can only return with 0 - 127. Some platforms treat exit code >= 128

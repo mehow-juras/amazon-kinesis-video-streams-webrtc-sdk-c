@@ -44,7 +44,28 @@ typedef enum {
 } RTX_CODEC;
 
 typedef struct {
+    UINT16 seqNum;
+    UINT16 packetSize;
+    UINT64 localTimeKvs;
+    UINT64 remoteTimeKvs;
+} TwccPacket, *PTwccPacket;
+
+typedef struct {
+    StackQueue twccPackets;
+    TwccPacket twccPacketBySeqNum[65536]; // twccPacketBySeqNum takes about 1.2MB of RAM but provides great cache locality
+    UINT64 lastLocalTimeKvs;
+    UINT16 lastReportedSeqNum;
+} TwccManager, *PTwccManager;
+
+typedef struct {
     RtcPeerConnection peerConnection;
+    // UINT32 padding padding makes transportWideSequenceNumber 64bit aligned
+    // we put atomics at the top of structs because customers application could set the packing to 0
+    // in which case any atomic operations would result in bus errors if there is a misalignment
+    // for more see https://github.com/awslabs/amazon-kinesis-video-streams-webrtc-sdk-c/pull/987#discussion_r534432907
+    UINT32 padding;
+    volatile SIZE_T transportWideSequenceNumber;
+
     PIceAgent pIceAgent;
     PDtlsSession pDtlsSession;
     BOOL dtlsIsServer;
@@ -99,6 +120,14 @@ typedef struct {
     UINT16 MTU;
 
     NullableBool canTrickleIce;
+
+    // congestion control
+    // https://tools.ietf.org/html/draft-holmer-rmcat-transport-wide-cc-extensions-01
+    UINT16 twccExtId;
+    MUTEX twccLock;
+    PTwccManager pTwccManager;
+    RtcOnSenderBandwidthEstimation onSenderBandwidthEstimation;
+    UINT64 onSenderBandwidthEstimationCustomData;
 } KvsPeerConnection, *PKvsPeerConnection;
 
 typedef struct {
@@ -115,6 +144,10 @@ VOID onSctpSessionDataChannelOpen(UINT64, UINT32, PBYTE, UINT32);
 
 STATUS sendPacketToRtpReceiver(PKvsPeerConnection, PBYTE, UINT32);
 STATUS changePeerConnectionState(PKvsPeerConnection, RTC_PEER_CONNECTION_STATE);
+STATUS twccManagerOnPacketSent(PKvsPeerConnection, PRtpPacket);
+
+// visible for testing only
+VOID onIceConnectionStateChange(UINT64, UINT64);
 
 #ifdef __cplusplus
 }

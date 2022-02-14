@@ -10,7 +10,10 @@ INT32 main(INT32 argc, CHAR* argv[])
     UINT32 frameSize;
     PSampleConfiguration pSampleConfiguration = NULL;
     SignalingClientMetrics signalingClientMetrics;
-    signalingClientMetrics.version = 0;
+    PCHAR pChannelName;
+    signalingClientMetrics.version = SIGNALING_CLIENT_METRICS_CURRENT_VERSION;
+
+    SET_INSTRUMENTED_ALLOCATORS();
 
 #ifndef _WIN32
     signal(SIGINT, sigintHandler);
@@ -18,14 +21,20 @@ INT32 main(INT32 argc, CHAR* argv[])
 
     // do trickleIce by default
     printf("[KVS Master] Using trickleICE by default\n");
-    retStatus =
-        createSampleConfiguration(argc > 1 ? argv[1] : SAMPLE_CHANNEL_NAME, SIGNALING_CHANNEL_ROLE_TYPE_MASTER, TRUE, TRUE, &pSampleConfiguration);
+
+#ifdef IOT_CORE_ENABLE_CREDENTIALS
+    CHK_ERR((pChannelName = getenv(IOT_CORE_THING_NAME)) != NULL, STATUS_INVALID_OPERATION, "AWS_IOT_CORE_THING_NAME must be set");
+#else
+    pChannelName = argc > 1 ? argv[1] : SAMPLE_CHANNEL_NAME;
+#endif
+
+    retStatus = createSampleConfiguration(pChannelName, SIGNALING_CHANNEL_ROLE_TYPE_MASTER, TRUE, TRUE, &pSampleConfiguration);
     if (retStatus != STATUS_SUCCESS) {
         printf("[KVS Master] createSampleConfiguration(): operation returned status code: 0x%08x \n", retStatus);
         goto CleanUp;
     }
 
-    printf("[KVS Master] Created signaling channel %s\n", (argc > 1 ? argv[1] : SAMPLE_CHANNEL_NAME));
+    printf("[KVS Master] Created signaling channel %s\n", pChannelName);
 
     if (pSampleConfiguration->enableFileLogging) {
         retStatus =
@@ -82,6 +91,12 @@ INT32 main(INT32 argc, CHAR* argv[])
     printf("[KVS Master] Signaling client created successfully\n");
 
     // Enable the processing of the messages
+    retStatus = signalingClientFetchSync(pSampleConfiguration->signalingClientHandle);
+    if (retStatus != STATUS_SUCCESS) {
+        printf("[KVS Master] signalingClientFetchSync(): operation returned status code: 0x%08x \n", retStatus);
+        goto CleanUp;
+    }
+
     retStatus = signalingClientConnectSync(pSampleConfiguration->signalingClientHandle);
     if (retStatus != STATUS_SUCCESS) {
         printf("[KVS Master] signalingClientConnectSync(): operation returned status code: 0x%08x \n", retStatus);
@@ -91,7 +106,7 @@ INT32 main(INT32 argc, CHAR* argv[])
 
     gSampleConfiguration = pSampleConfiguration;
 
-    printf("[KVS Master] Channel %s set up done \n", (argc > 1 ? argv[1] : SAMPLE_CHANNEL_NAME));
+    printf("[KVS Master] Channel %s set up done \n", pChannelName);
 
     // Checking for termination
     retStatus = sessionCleanupWait(pSampleConfiguration);
@@ -105,7 +120,7 @@ INT32 main(INT32 argc, CHAR* argv[])
 CleanUp:
 
     if (retStatus != STATUS_SUCCESS) {
-        printf("[KVS Master] Terminated with status code 0x%08x", retStatus);
+        printf("[KVS Master] Terminated with status code 0x%08x\n", retStatus);
     }
 
     printf("[KVS Master] Cleaning up....\n");
@@ -113,15 +128,22 @@ CleanUp:
         // Kick of the termination sequence
         ATOMIC_STORE_BOOL(&pSampleConfiguration->appTerminateFlag, TRUE);
 
-        // Join the threads
-        if (pSampleConfiguration->videoSenderTid != (UINT64) NULL) {
-            // Join the threads
-            THREAD_JOIN(pSampleConfiguration->videoSenderTid, NULL);
+        if (IS_VALID_MUTEX_VALUE(pSampleConfiguration->sampleConfigurationObjLock)) {
+            MUTEX_LOCK(pSampleConfiguration->sampleConfigurationObjLock);
         }
 
-        if (pSampleConfiguration->audioSenderTid != (UINT64) NULL) {
-            // Join the threads
-            THREAD_JOIN(pSampleConfiguration->audioSenderTid, NULL);
+        // Cancel the media thread
+        if (pSampleConfiguration->mediaThreadStarted) {
+            DLOGD("Canceling media thread");
+            THREAD_CANCEL(pSampleConfiguration->mediaSenderTid);
+        }
+
+        if (IS_VALID_MUTEX_VALUE(pSampleConfiguration->sampleConfigurationObjLock)) {
+            MUTEX_UNLOCK(pSampleConfiguration->sampleConfigurationObjLock);
+        }
+
+        if (pSampleConfiguration->mediaSenderTid != INVALID_TID_VALUE) {
+            THREAD_JOIN(pSampleConfiguration->mediaSenderTid, NULL);
         }
 
         if (pSampleConfiguration->enableFileLogging) {
@@ -131,7 +153,7 @@ CleanUp:
         if (retStatus == STATUS_SUCCESS) {
             logSignalingClientStats(&signalingClientMetrics);
         } else {
-            printf("[KVS Master] signalingClientGetMetrics() operation returned status code: 0x%08x", retStatus);
+            printf("[KVS Master] signalingClientGetMetrics() operation returned status code: 0x%08x\n", retStatus);
         }
         retStatus = freeSignalingClient(&pSampleConfiguration->signalingClientHandle);
         if (retStatus != STATUS_SUCCESS) {
@@ -144,6 +166,8 @@ CleanUp:
         }
     }
     printf("[KVS Master] Cleanup done\n");
+
+    RESET_INSTRUMENTED_ALLOCATORS();
 
     // https://www.gnu.org/software/libc/manual/html_node/Exit-Status.html
     // We can only return with 0 - 127. Some platforms treat exit code >= 128
@@ -215,10 +239,10 @@ PVOID sendVideoPackets(PVOID args)
 
         // Re-alloc if needed
         if (frameSize > pSampleConfiguration->videoBufferSize) {
-            pSampleConfiguration->pVideoFrameBuffer = (PBYTE) realloc(pSampleConfiguration->pVideoFrameBuffer, frameSize);
+            pSampleConfiguration->pVideoFrameBuffer = (PBYTE) MEMREALLOC(pSampleConfiguration->pVideoFrameBuffer, frameSize);
             if (pSampleConfiguration->pVideoFrameBuffer == NULL) {
                 printf("[KVS Master] Video frame Buffer reallocation failed...%s (code %d)\n", strerror(errno), errno);
-                printf("[KVS Master] realloc(): operation returned status code: 0x%08x \n", STATUS_NOT_ENOUGH_MEMORY);
+                printf("[KVS Master] MEMREALLOC(): operation returned status code: 0x%08x \n", STATUS_NOT_ENOUGH_MEMORY);
                 goto CleanUp;
             }
 
@@ -266,6 +290,8 @@ PVOID sendVideoPackets(PVOID args)
 
 CleanUp:
 
+    CHK_LOG_ERR(retStatus);
+
     return (PVOID)(ULONG_PTR) retStatus;
 }
 
@@ -298,10 +324,10 @@ PVOID sendAudioPackets(PVOID args)
 
         // Re-alloc if needed
         if (frameSize > pSampleConfiguration->audioBufferSize) {
-            pSampleConfiguration->pAudioFrameBuffer = (UINT8*) realloc(pSampleConfiguration->pAudioFrameBuffer, frameSize);
+            pSampleConfiguration->pAudioFrameBuffer = (UINT8*) MEMREALLOC(pSampleConfiguration->pAudioFrameBuffer, frameSize);
             if (pSampleConfiguration->pAudioFrameBuffer == NULL) {
                 printf("[KVS Master] Audio frame Buffer reallocation failed...%s (code %d)\n", strerror(errno), errno);
-                printf("[KVS Master] realloc(): operation returned status code: 0x%08x \n", STATUS_NOT_ENOUGH_MEMORY);
+                printf("[KVS Master] MEMREALLOC(): operation returned status code: 0x%08x \n", STATUS_NOT_ENOUGH_MEMORY);
                 goto CleanUp;
             }
         }

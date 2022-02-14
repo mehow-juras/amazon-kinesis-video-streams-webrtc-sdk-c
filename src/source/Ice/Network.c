@@ -65,9 +65,11 @@ STATUS getLocalhostIpAddresses(PKvsIpAddress destIpList, PUINT32 pDestIpListLen,
                     destIpList[ipCount].port = 0;
 
                     pIpv6Addr = (struct sockaddr_in6*) (ua->Address.lpSockaddr);
+                    // Ignore unspecified addres: the other peer can't use this address
                     // Ignore link local: not very useful and will add work unnecessarily
                     // Ignore site local: https://tools.ietf.org/html/rfc8445#section-5.1.1.1
-                    if (IN6_IS_ADDR_LINKLOCAL(&pIpv6Addr->sin6_addr) || IN6_IS_ADDR_SITELOCAL(&pIpv6Addr->sin6_addr)) {
+                    if (IN6_IS_ADDR_UNSPECIFIED(&pIpv6Addr->sin6_addr) || IN6_IS_ADDR_LINKLOCAL(&pIpv6Addr->sin6_addr) ||
+                        IN6_IS_ADDR_SITELOCAL(&pIpv6Addr->sin6_addr)) {
                         continue;
                     }
                     MEMCPY(destIpList[ipCount].address, &pIpv6Addr->sin6_addr, IPV6_ADDRESS_LENGTH);
@@ -108,9 +110,11 @@ STATUS getLocalhostIpAddresses(PKvsIpAddress destIpList, PUINT32 pDestIpListLen,
                     destIpList[ipCount].family = KVS_IP_FAMILY_TYPE_IPV6;
                     destIpList[ipCount].port = 0;
                     pIpv6Addr = (struct sockaddr_in6*) ifa->ifa_addr;
+                    // Ignore unspecified addres: the other peer can't use this address
                     // Ignore link local: not very useful and will add work unnecessarily
                     // Ignore site local: https://tools.ietf.org/html/rfc8445#section-5.1.1.1
-                    if (IN6_IS_ADDR_LINKLOCAL(&pIpv6Addr->sin6_addr) || IN6_IS_ADDR_SITELOCAL(&pIpv6Addr->sin6_addr)) {
+                    if (IN6_IS_ADDR_UNSPECIFIED(&pIpv6Addr->sin6_addr) || IN6_IS_ADDR_LINKLOCAL(&pIpv6Addr->sin6_addr) ||
+                        IN6_IS_ADDR_SITELOCAL(&pIpv6Addr->sin6_addr)) {
                         continue;
                     }
                     MEMCPY(destIpList[ipCount].address, &pIpv6Addr->sin6_addr, IPV6_ADDRESS_LENGTH);
@@ -162,11 +166,11 @@ STATUS createSocket(KVS_IP_FAMILY_TYPE familyType, KVS_SOCKET_PROTOCOL protocol,
 
     optionValue = 1;
     if (setsockopt(sockfd, SOL_SOCKET, NO_SIGNAL, &optionValue, SIZEOF(optionValue)) < 0) {
-        DLOGD("setsockopt() failed with errno %s", getErrorString(getErrorCode()));
+        DLOGD("setsockopt() NO_SIGNAL failed with errno %s", getErrorString(getErrorCode()));
     }
 
     if (sendBufSize > 0 && setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, &sendBufSize, SIZEOF(sendBufSize)) < 0) {
-        DLOGW("setsockopt() failed with errno %s", getErrorString(getErrorCode()));
+        DLOGW("setsockopt() SO_SNDBUF failed with errno %s", getErrorString(getErrorCode()));
         CHK(FALSE, STATUS_SOCKET_SET_SEND_BUFFER_SIZE_FAILED);
     }
 
@@ -291,7 +295,7 @@ STATUS socketConnect(PKvsIpAddress pPeerAddress, INT32 sockfd)
     }
 
     retVal = connect(sockfd, peerSockAddr, addrLen);
-    CHK_ERR(retVal >= 0 || getErrorCode() == EINPROGRESS, STATUS_SOCKET_CONNECT_FAILED, "connect() failed with errno %s",
+    CHK_ERR(retVal >= 0 || getErrorCode() == KVS_SOCKET_IN_PROGRESS, STATUS_SOCKET_CONNECT_FAILED, "connect() failed with errno %s",
             getErrorString(getErrorCode()));
 
 CleanUp:

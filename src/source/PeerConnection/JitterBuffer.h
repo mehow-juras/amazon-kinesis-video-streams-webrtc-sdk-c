@@ -12,7 +12,7 @@ extern "C" {
 
 typedef STATUS (*FrameReadyFunc)(UINT64, UINT16, UINT16, UINT32);
 typedef STATUS (*FrameDroppedFunc)(UINT64, UINT16, UINT16, UINT32);
-#define UINT16_DEC(a) ((UINT16)((a) -1))
+#define UINT16_DEC(a) ((UINT16) ((a) -1))
 
 #define JITTER_BUFFER_HASH_TABLE_BUCKET_COUNT  3000
 #define JITTER_BUFFER_HASH_TABLE_BUCKET_LENGTH 2
@@ -29,20 +29,21 @@ typedef struct {
     // holds estimated jitter, in clockRate units
     DOUBLE jitter;
     UINT32 lastPushTimestamp;
-    UINT16 lastRemovedSequenceNumber;
-    UINT16 lastPopSequenceNumber;
-    UINT32 lastPopTimestamp;
+    UINT16 headSequenceNumber;
+    UINT32 headTimestamp;
     UINT64 maxLatency;
     UINT64 customData;
     UINT32 clockRate;
     BOOL started;
+    BOOL firstFrameProcessed;
     PHashTable pPkgBufferHashTable;
 } JitterBuffer, *PJitterBuffer;
 
+// constructor
 STATUS createJitterBuffer(FrameReadyFunc, FrameDroppedFunc, DepayRtpPayloadFunc, UINT32, UINT32, UINT64, PJitterBuffer*);
+// destructor
 STATUS freeJitterBuffer(PJitterBuffer*);
 STATUS jitterBufferPush(PJitterBuffer, PRtpPacket, PBOOL);
-STATUS jitterBufferPop(PJitterBuffer, BOOL);
 STATUS jitterBufferDropBufferData(PJitterBuffer, UINT16, UINT16, UINT32);
 STATUS jitterBufferFillFrameData(PJitterBuffer, PBYTE, UINT32, PUINT32, UINT16, UINT16);
 

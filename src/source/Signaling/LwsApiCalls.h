@@ -87,6 +87,7 @@ extern "C" {
 #define SIGNALING_GO_AWAY              "GO_AWAY"
 #define SIGNALING_RECONNECT_ICE_SERVER "RECONNECT_ICE_SERVER"
 #define SIGNALING_STATUS_RESPONSE      "STATUS_RESPONSE"
+#define SIGNALING_MESSAGE_UNKNOWN      "UNKNOWN"
 
 // Max length of the signaling message type string length
 #define MAX_SIGNALING_MESSAGE_TYPE_LEN ARRAY_SIZE(SIGNALING_RECONNECT_ICE_SERVER)
@@ -99,7 +100,7 @@ extern "C" {
     "{\n"                                                                                                                                            \
     "\t\"action\": \"%s\",\n"                                                                                                                        \
     "\t\"RecipientClientId\": \"%.*s\",\n"                                                                                                           \
-    "\t\"MessagePayload\": \"%s\"\n"                                                                                                                 \
+    "\t\"MessagePayload\": \"%s\"%s\n"                                                                                                               \
     "}"
 
 // Send message JSON template with correlation id
@@ -108,8 +109,47 @@ extern "C" {
     "\t\"action\": \"%s\",\n"                                                                                                                        \
     "\t\"RecipientClientId\": \"%.*s\",\n"                                                                                                           \
     "\t\"MessagePayload\": \"%s\",\n"                                                                                                                \
-    "\t\"CorrelationId\": \"%.*s\"\n"                                                                                                                \
+    "\t\"CorrelationId\": \"%.*s\"%s\n"                                                                                                              \
     "}"
+
+#define SIGNALING_ICE_SERVER_LIST_TEMPLATE_START                                                                                                     \
+    ",\n"                                                                                                                                            \
+    "\t\"IceServerList\": ["
+
+#define SIGNALING_ICE_SERVER_LIST_TEMPLATE_END "\n\t]"
+
+#define SIGNALING_ICE_SERVER_TEMPLATE                                                                                                                \
+    "\n"                                                                                                                                             \
+    "\t\t{\n"                                                                                                                                        \
+    "\t\t\t\"Password\": \"%s\",\n"                                                                                                                  \
+    "\t\t\t\"Ttl\": %" PRIu64 ",\n"                                                                                                                  \
+    "\t\t\t\"Uris\": [%s],\n"                                                                                                                        \
+    "\t\t\t\"Username\": \"%s\"\n"                                                                                                                   \
+    "\t\t},"
+
+// max length for http date header, must follow RFC 7231, should be less than 32 characters
+#define MAX_DATE_HEADER_BUFFER_LENGTH 64
+
+#define MIN_CLOCK_SKEW_TIME_TO_CORRECT (5 * HUNDREDS_OF_NANOS_IN_A_MINUTE)
+
+// Defining max bloat size per item in the JSON template
+#define ICE_SERVER_INFO_TEMPLATE_BLOAT_SIZE 128
+
+// Max bloat size for representing a single ICE URI in the JSON
+#define ICE_SERVER_URI_BLOAT_SIZE 10
+
+// Max string length for representing the URIs
+#define MAX_ICE_SERVER_URI_STR_LEN (MAX_ICE_CONFIG_URI_COUNT * (MAX_ICE_CONFIG_URI_LEN + ICE_SERVER_URI_BLOAT_SIZE))
+
+// Max string length for representing an ICE config
+#define MAX_ICE_SERVER_INFO_STR_LEN                                                                                                                  \
+    (MAX_ICE_SERVER_URI_STR_LEN + MAX_ICE_CONFIG_USER_NAME_LEN + MAX_ICE_CONFIG_CREDENTIAL_LEN + ICE_SERVER_INFO_TEMPLATE_BLOAT_SIZE)
+
+// Max string length for the ice server info which includes the template length * max struct count * content
+#define MAX_ICE_SERVER_INFOS_STR_LEN (MAX_ICE_CONFIG_COUNT * MAX_ICE_SERVER_INFO_STR_LEN)
+
+// Encoded max ice server infos string len
+#define MAX_ENCODED_ICE_SERVER_INFOS_STR_LEN (MAX_ICE_SERVER_INFOS_STR_LEN + ICE_SERVER_INFO_TEMPLATE_BLOAT_SIZE)
 
 // Scratch buffer size
 #define LWS_SCRATCH_BUFFER_SIZE (MAX_JSON_PARAMETER_STRING_LEN + LWS_PRE)
@@ -118,9 +158,6 @@ extern "C" {
 #define LWS_MESSAGE_BUFFER_SIZE (SIZEOF(CHAR) * (MAX_SIGNALING_MESSAGE_LEN + LWS_PRE))
 
 #define AWS_SIG_V4_HEADER_HOST (PCHAR) "host"
-
-#define BOOLEAN_LITERAL_TRUE  "true"
-#define BOOLEAN_LITERAL_FALSE "false"
 
 // Specifies whether to block on the correlation id
 #define BLOCK_ON_CORRELATION_ID FALSE
@@ -131,7 +168,7 @@ extern "C" {
 // Check for the stale credentials
 #define CHECK_SIGNALING_CREDENTIALS_EXPIRATION(p)                                                                                                    \
     do {                                                                                                                                             \
-        if (GETTIME() >= (p)->pAwsCredentials->expiration) {                                                                                         \
+        if (SIGNALING_GET_CURRENT_TIME((p)) >= (p)->pAwsCredentials->expiration) {                                                                                         \
             ATOMIC_STORE(&(p)->result, (SIZE_T) SERVICE_CALL_NOT_AUTHORIZED);                                                                        \
             CHK(FALSE, retStatus);                                                                                                                   \
         }                                                                                                                                            \
@@ -201,6 +238,9 @@ PVOID reconnectHandler(PVOID);
 INT32 lwsHttpCallbackRoutine(struct lws*, enum lws_callback_reasons, PVOID, PVOID, size_t);
 INT32 lwsWssCallbackRoutine(struct lws*, enum lws_callback_reasons, PVOID, PVOID, size_t);
 
+BOOL isCallResultSignatureExpired(PCallInfo);
+BOOL isCallResultSignatureNotYetCurrent(PCallInfo);
+
 STATUS describeChannelLws(PSignalingClient, UINT64);
 STATUS createChannelLws(PSignalingClient, UINT64);
 STATUS getChannelEndpointLws(PSignalingClient, UINT64);
@@ -213,12 +253,13 @@ STATUS freeLwsCallInfo(PLwsCallInfo*);
 
 PVOID receiveLwsMessageWrapper(PVOID);
 
-STATUS sendLwsMessage(PSignalingClient, PCHAR, PCHAR, PCHAR, UINT32, PCHAR, UINT32);
+STATUS sendLwsMessage(PSignalingClient, SIGNALING_MESSAGE_TYPE, PCHAR, PCHAR, UINT32, PCHAR, UINT32);
 STATUS writeLwsData(PSignalingClient, BOOL);
 STATUS terminateLwsListenerLoop(PSignalingClient);
 STATUS receiveLwsMessage(PSignalingClient, PCHAR, UINT32);
 STATUS getMessageTypeFromString(PCHAR, UINT32, SIGNALING_MESSAGE_TYPE*);
-STATUS wakeLwsServiceEventLoop(PSignalingClient);
+PCHAR getMessageTypeInString(SIGNALING_MESSAGE_TYPE);
+STATUS wakeLwsServiceEventLoop(PSignalingClient, UINT32);
 STATUS terminateConnectionWithStatus(PSignalingClient, SERVICE_CALL_RESULT);
 
 #ifdef __cplusplus

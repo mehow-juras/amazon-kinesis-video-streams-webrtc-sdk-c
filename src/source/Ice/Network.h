@@ -33,6 +33,14 @@ extern "C" {
 #define EAI_SYSTEM -11
 #endif
 
+// Windows uses EWOULDBLOCK (WSAEWOULDBLOCK) to indicate connection attempt
+// cannot be completed immediately, whereas POSIX uses EINPROGRESS.
+#ifdef _WIN32
+#define KVS_SOCKET_IN_PROGRESS EWOULDBLOCK
+#else
+#define KVS_SOCKET_IN_PROGRESS EINPROGRESS
+#endif
+
 typedef enum {
     KVS_SOCKET_PROTOCOL_NONE,
     KVS_SOCKET_PROTOCOL_TCP,
@@ -108,6 +116,12 @@ INT32 getErrorCode(VOID);
  * @return - PCHAR string associated with error code
  */
 PCHAR getErrorString(INT32);
+
+#ifdef _WIN32
+#define POLL WSAPoll
+#else
+#define POLL poll
+#endif
 
 #ifdef __cplusplus
 }

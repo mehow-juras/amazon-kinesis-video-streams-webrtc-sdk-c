@@ -21,7 +21,7 @@ extern "C" {
 #define ICE_CONFIGURATION_REFRESH_GRACE_PERIOD (30 * HUNDREDS_OF_NANOS_IN_A_SECOND)
 
 // Termination timeout
-#define SIGNALING_CLIENT_SHUTDOWN_TIMEOUT (5 * HUNDREDS_OF_NANOS_IN_A_SECOND)
+#define SIGNALING_CLIENT_SHUTDOWN_TIMEOUT ((2 + SIGNALING_SERVICE_API_CALL_TIMEOUT_IN_SECONDS) * HUNDREDS_OF_NANOS_IN_A_SECOND)
 
 // Signaling client state literal definitions
 #define SIGNALING_CLIENT_STATE_UNKNOWN_STR         "Unknown"
@@ -50,13 +50,24 @@ extern "C" {
 // Async ICE config refresh delay in case if the signaling is not yet in READY state
 #define SIGNALING_ASYNC_ICE_CONFIG_REFRESH_DELAY (50 * HUNDREDS_OF_NANOS_IN_A_MILLISECOND)
 
+// Max libWebSockets protocol count. IMPORTANT: Ensure it's 1 + PROTOCOL_INDEX_WSS
+#define LWS_PROTOCOL_COUNT 2
+
+/**
+ * Default signaling clockskew (endpoint --> clockskew) hash table bucket count/length
+ */
+#define SIGNALING_CLOCKSKEW_HASH_TABLE_BUCKET_LENGTH 2
+#define SIGNALING_CLOCKSKEW_HASH_TABLE_BUCKET_COUNT  MIN_HASH_BUCKET_COUNT // 16
+
 // API call latency calculation
 #define SIGNALING_API_LATENCY_CALCULATION(pClient, time, isCpApi)                                                                                    \
     MUTEX_LOCK((pClient)->diagnosticsLock);                                                                                                          \
     if (isCpApi) {                                                                                                                                   \
-        (pClient)->diagnostics.cpApiLatency = EMA_ACCUMULATOR_GET_NEXT((pClient)->diagnostics.cpApiLatency, GETTIME() - (time));                     \
+        (pClient)->diagnostics.cpApiLatency = EMA_ACCUMULATOR_GET_NEXT((pClient)->diagnostics.cpApiLatency,                                          \
+                                                                       SIGNALING_GET_CURRENT_TIME((pClient)) - (time));                              \
     } else {                                                                                                                                         \
-        (pClient)->diagnostics.dpApiLatency = EMA_ACCUMULATOR_GET_NEXT((pClient)->diagnostics.dpApiLatency, GETTIME() - (time));                     \
+        (pClient)->diagnostics.dpApiLatency = EMA_ACCUMULATOR_GET_NEXT((pClient)->diagnostics.dpApiLatency,                                          \
+                                                                       SIGNALING_GET_CURRENT_TIME((pClient)) - (time));                              \
     }                                                                                                                                                \
     MUTEX_UNLOCK((pClient)->diagnosticsLock);
 
@@ -64,6 +75,40 @@ extern "C" {
     if ((pClient) != NULL && STATUS_FAILED(status)) {                                                                                                \
         ATOMIC_INCREMENT(&(pClient)->diagnostics.numberOfErrors);                                                                                    \
     }
+
+#define IS_CURRENT_TIME_CALLBACK_SET(pClient) ((pClient) != NULL && ((pClient)->signalingClientCallbacks.getCurrentTimeFn != NULL))
+
+#define SIGNALING_GET_CURRENT_TIME(pClient) (IS_CURRENT_TIME_CALLBACK_SET((pClient)) ? \
+                                            ((pClient)->signalingClientCallbacks.getCurrentTimeFn((pClient)->signalingClientCallbacks.customData)) : \
+                                            GETTIME())
+
+#define DEFAULT_CREATE_SIGNALING_CLIENT_RETRY_ATTEMPTS 7
+
+static const ExponentialBackoffRetryStrategyConfig DEFAULT_SIGNALING_STATE_MACHINE_EXPONENTIAL_BACKOFF_RETRY_CONFIGURATION = {
+    /* Exponential wait times with this config will look like following -
+        ************************************
+        * Retry Count *      Wait time     *
+        * **********************************
+        *     1       *    100ms + jitter  *
+        *     2       *    200ms + jitter  *
+        *     3       *    400ms + jitter  *
+        *     4       *    800ms + jitter  *
+        *     5       *   1600ms + jitter  *
+        *     6       *   3200ms + jitter  *
+        *     7       *   6400ms + jitter  *
+        *     8       *  10000ms + jitter  *
+        *     9       *  10000ms + jitter  *
+        *    10       *  10000ms + jitter  *
+        ************************************
+        jitter = random number between [0, wait time)
+    */
+    KVS_INFINITE_EXPONENTIAL_RETRIES, /* max retry count */
+    10000, /* max retry wait time in milliseconds */
+    100, /* factor determining exponential curve in milliseconds */
+    DEFAULT_KVS_MIN_TIME_TO_RESET_RETRY_STATE_MILLISECONDS, /* minimum time in milliseconds to reset retry state */
+    FULL_JITTER, /* use full jitter variant */
+    0 /* jitter value unused for full jitter variant */
+};
 
 // Forward declaration
 typedef struct __LwsCallInfo* PLwsCallInfo;
@@ -78,12 +123,12 @@ typedef struct {
     // Public client info structure
     SignalingClientInfo signalingClientInfo;
 
+    // V1 features
+    CHAR cacheFilePath[MAX_PATH_LEN + 1];
+
     //
     // Below members will be used for direct injection for tests hooks
     //
-
-    // Injected ICE server refresh period
-    UINT64 iceRefreshPeriod;
 
     // Injected connect timeout
     UINT64 connectTimeout;
@@ -104,6 +149,10 @@ typedef struct {
     SignalingApiCallHookFunc connectPostHookFn;
     SignalingApiCallHookFunc deletePreHookFn;
     SignalingApiCallHookFunc deletePostHookFn;
+
+    // Retry strategy used for signaling state machine
+    KvsRetryStrategy signalingStateMachineRetryStrategy;
+    KvsRetryStrategyCallbacks signalingStateMachineRetryStrategyCallbacks;
 } SignalingClientInfoInternal, *PSignalingClientInfoInternal;
 
 /**
@@ -130,12 +179,17 @@ typedef struct {
     UINT64 connectTime;
     UINT64 cpApiLatency;
     UINT64 dpApiLatency;
+    PHashTable pEndpointToClockSkewHashMap;
+    UINT32 stateMachineRetryCount;
 } SignalingDiagnostics, PSignalingDiagnostics;
 
 /**
  * Internal representation of the Signaling client.
  */
 typedef struct {
+    // Current version of the structure
+    UINT32 version;
+
     // Current service call result
     volatile SIZE_T result;
 
@@ -157,10 +211,6 @@ typedef struct {
     // The channel is deleted
     volatile ATOMIC_BOOL deleted;
 
-    // Based on the channel info we can async the ice config on create channel
-    // call only and not async on repeat state transition when refreshing for example.
-    volatile ATOMIC_BOOL asyncGetIceConfig;
-
     // Having state machine logic rely on call result of SERVICE_CALL_RESULT_SIGNALING_RECONNECT_ICE
     // to transition to ICE config state is not enough in Async update mode when
     // connect is in progress as the result of connect will override the result
@@ -168,11 +218,8 @@ typedef struct {
     // if it comes first forcing the state machine to loop back to connected state.
     volatile ATOMIC_BOOL refreshIceConfig;
 
-    // Indicate whether the ICE configuration has been retrieved at least once
-    volatile ATOMIC_BOOL iceConfigRetrieved;
-
-    // Current version of the structure
-    UINT32 version;
+    // Indicates that there is another thread attempting to grab the service lock
+    volatile ATOMIC_BOOL serviceLockContention;
 
     // Stored Client info
     SignalingClientInfoInternal clientInfo;
@@ -210,9 +257,6 @@ typedef struct {
     // Service call context
     ServiceCallContext serviceCallContext;
 
-    // Indicates whether to self-prime on Ready or not
-    BOOL continueOnReady;
-
     // Interlocking the state transitions
     MUTEX stateLock;
 
@@ -234,8 +278,11 @@ typedef struct {
     // Conditional variable for receiving response to the sent message
     CVAR receiveCvar;
 
-    // Execute the state machine until this time
-    UINT64 stepUntil;
+    // Indicates when the ICE configuration has been retrieved
+    UINT64 iceConfigTime;
+
+    // Indicates when the ICE configuration is considered expired
+    UINT64 iceConfigExpiration;
 
     // Ongoing listener call info
     PLwsCallInfo pOngoingCallInfo;
@@ -249,8 +296,11 @@ typedef struct {
     // LWS context to use for Restful API
     struct lws_context* pLwsContext;
 
-    // Signaling protocols
-    struct lws_protocols signalingProtocols[3];
+    // Signaling protocols - one more for the NULL terminator protocol
+    struct lws_protocols signalingProtocols[LWS_PROTOCOL_COUNT + 1];
+
+    // Stored wsi objects
+    struct lws* currentWsi[LWS_PROTOCOL_COUNT];
 
     // List of the ongoing messages
     PStackQueue pMessageQueue;
@@ -266,9 +316,6 @@ typedef struct {
 
     // Re-entrant lock for diagnostics/stats
     MUTEX diagnosticsLock;
-
-    // Timer queue to handle stale ICE configuration
-    TIMER_QUEUE_HANDLE timerQueueHandle;
 
     // Internal diagnostics object
     SignalingDiagnostics diagnostics;
@@ -290,8 +337,9 @@ STATUS createSignalingSync(PSignalingClientInfoInternal, PChannelInfo, PSignalin
 STATUS freeSignaling(PSignalingClient*);
 
 STATUS signalingSendMessageSync(PSignalingClient, PSignalingMessage);
-STATUS signalingGetIceConfigInfoCout(PSignalingClient, PUINT32);
+STATUS signalingGetIceConfigInfoCount(PSignalingClient, PUINT32);
 STATUS signalingGetIceConfigInfo(PSignalingClient, UINT32, PIceConfigInfo*);
+STATUS signalingFetchSync(PSignalingClient);
 STATUS signalingConnectSync(PSignalingClient);
 STATUS signalingDisconnectSync(PSignalingClient);
 STATUS signalingDeleteSync(PSignalingClient);
@@ -304,7 +352,7 @@ STATUS signalingStoreOngoingMessage(PSignalingClient, PSignalingMessage);
 STATUS signalingRemoveOngoingMessage(PSignalingClient, PCHAR);
 STATUS signalingGetOngoingMessage(PSignalingClient, PCHAR, PCHAR, PSignalingMessage*);
 
-STATUS refreshIceConfigurationCallback(UINT32, UINT64, UINT64);
+STATUS refreshIceConfiguration(PSignalingClient);
 
 UINT64 signalingGetCurrentTime(UINT64);
 
@@ -312,7 +360,7 @@ STATUS awaitForThreadTermination(PThreadTracker, UINT64);
 STATUS initializeThreadTracker(PThreadTracker);
 STATUS uninitializeThreadTracker(PThreadTracker);
 
-STATUS terminateOngoingOperations(PSignalingClient, BOOL);
+STATUS terminateOngoingOperations(PSignalingClient);
 
 STATUS describeChannel(PSignalingClient, UINT64);
 STATUS createChannel(PSignalingClient, UINT64);
@@ -321,6 +369,10 @@ STATUS getIceConfig(PSignalingClient, UINT64);
 STATUS connectSignalingChannel(PSignalingClient, UINT64);
 STATUS deleteChannel(PSignalingClient, UINT64);
 STATUS signalingGetMetrics(PSignalingClient, PSignalingClientMetrics);
+
+STATUS configureRetryStrategyForSignalingStateMachine(PSignalingClient);
+STATUS setupDefaultRetryStrategyForSignalingStateMachine(PSignalingClient);
+STATUS freeClientRetryStrategy(PSignalingClient);
 
 #ifdef __cplusplus
 }
